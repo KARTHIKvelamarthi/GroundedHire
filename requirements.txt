@@ -1,0 +1,5 @@
+pymupdf>=1.22.0
+tiktoken
+sentence-transformers
+faiss-cpu
+tqdm

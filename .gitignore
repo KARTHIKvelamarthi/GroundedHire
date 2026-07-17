@@ -1,0 +1,38 @@
+# Textbook source PDFs (large & copyrighted files)
+role_pdfs/
+
+# Candidate resumes and uploads
+sample_resume.txt
+j0_resume.pdf
+test_3.pdf
+*resume.pdf
+*resume.txt
+*resume.docx
+*_resume.pdf
+*_resume.txt
+
+# Python standard files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.env
+
+# Conda environment artifacts
+.conda/
+conda-meta/
+conda-env/
+
+# Logs and debug files
+*.log
+debug.log
+
+# IDE folders
+.vscode/
+.idea/
+.project
+.pydevproject
+.settings/
