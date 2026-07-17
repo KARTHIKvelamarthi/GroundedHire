@@ -1,0 +1,515 @@
+import os
+import sys
+import json
+import shutil
+import uuid
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel
+
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+
+# Ensure the parent directory is in python search path
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# Import workspace modules
+import resume_parser
+import question_generator
+import answer_validator
+import llm_client
+
+# Import local database and models
+from .database import engine, Base, get_db
+from .models import Session as DBSession, Question as DBQuestion, Answer as DBAnswer
+
+# Create FastAPI instance
+app = FastAPI(title="GroundedHire Backend API")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow React dev server or any origin locally
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize database tables
+Base.metadata.create_all(bind=engine)
+
+# Difficulty levels ordering
+DIFFICULTY_ORDER = ["beginner", "intermediate", "intermediate-dense"]
+
+def adjust_difficulty(current_tier: str, quality_signal: str) -> str:
+    """
+    Shifts the difficulty level up or down based on candidate performance.
+    """
+    try:
+        current_idx = DIFFICULTY_ORDER.index(current_tier.lower())
+    except ValueError:
+        current_idx = 1  # Default to intermediate
+        
+    if quality_signal == "strong":
+        new_idx = min(current_idx + 1, len(DIFFICULTY_ORDER) - 1)
+        return DIFFICULTY_ORDER[new_idx]
+    elif quality_signal == "needs_review":
+        new_idx = max(current_idx - 1, 0)
+        return DIFFICULTY_ORDER[new_idx]
+        
+    # 'developing' keeps current difficulty
+    return current_tier
+
+# Request Model for Answer Submission
+class AnswerSubmit(BaseModel):
+    question_id: str
+    answer_text: str
+
+@app.post("/session/start")
+async def start_session(
+    role: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Starts a new interview session:
+    1. Saves and parses the candidate's resume
+    2. Constructs a questions plan (skills + transitions + projects)
+    3. Creates a session entry in the database
+    4. Returns initialization parameters and a greeting message
+    """
+    if role not in ["ai_ml_engineer", "data_science_applied_ml"]:
+        raise HTTPException(status_code=400, detail="Invalid role specified.")
+
+    # Save uploaded file temporarily
+    temp_dir = os.path.join(parent_dir, "temp_uploads")
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{file.filename}")
+    
+    with open(temp_file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    try:
+        # Parse resume using the existing parser module
+        resume_profile = resume_parser.parse_resume(temp_file_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to parse resume: {str(e)}")
+    finally:
+        # Clean up temp file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+    # 1. Extract candidate and difficulty data
+    candidate_name = resume_profile.get("candidate_name") or "Candidate"
+    starting_difficulty = resume_profile.get("starting_difficulty_tier") or "intermediate"
+    
+    # 2. Plan skills phase
+    skill_topics = resume_profile.get("mapped_topics") or []
+    if len(skill_topics) > 6:
+        skill_topics = skill_topics[:6]
+        
+    # Plan projects phase
+    project_targets = [p for p in resume_profile.get("projects", []) if p.get("related_topics")]
+    if len(project_targets) > 3:
+        project_targets = project_targets[:3]
+        
+    # 3. Dynamic Padding: If skill_topics + project_targets is less than 6, pad skills with general ML topics
+    DEFAULT_TOPICS = ["classification", "overfitting_regularization", "deep_learning", "neural_networks", "optimization", "model_selection"]
+    for topic in DEFAULT_TOPICS:
+        if len(skill_topics) + len(project_targets) >= 6:
+            break
+        if topic not in skill_topics:
+            skill_topics.append(topic)
+            
+    # Compute total planned questions count
+    total_planned = len(skill_topics) + (1 if project_targets else 0) + len(project_targets)
+    # Clamp between 6 and 10
+    total_planned_questions = max(6, min(10, total_planned))
+    
+    # Build plan object
+    plan = {
+        "skill_topics": skill_topics,
+        "project_targets": project_targets
+    }
+    
+    # 4. Create Session in Database
+    new_session = DBSession(
+        candidate_name=candidate_name,
+        role=role,
+        resume_profile_json=json.dumps(resume_profile),
+        starting_difficulty_tier=starting_difficulty,
+        current_difficulty_tier=starting_difficulty,
+        total_planned_questions=total_planned_questions,
+        current_phase="skills",
+        questions_asked_count=0,
+        planned_topics_json=json.dumps(plan)
+    )
+    db.add(new_session)
+    db.commit()
+    db.refresh(new_session)
+    
+    # Generate Greeting Message
+    greeting_message = (
+        f"Hi {candidate_name}, you've applied for the {role} role. "
+        f"Based on your resume, I'd estimate you're currently at an {starting_difficulty} level in this field. "
+        f"Let's get started — I'll ask a few questions about your core skills first, then we'll dig into some of your projects."
+    )
+    
+    return {
+        "session_id": new_session.id,
+        "candidate_name": candidate_name,
+        "role": role,
+        "starting_difficulty_tier": starting_difficulty,
+        "total_planned_questions": total_planned_questions,
+        "greeting_message": greeting_message
+    }
+
+@app.get("/session/{session_id}/next-question")
+def get_next_question(session_id: str, db: Session = Depends(get_db)):
+    """
+    Returns the next question based on current phase and session progress.
+    Increments questions_asked_count and saves the generated question.
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    if session.questions_asked_count >= session.total_planned_questions:
+        return {
+            "question_id": None,
+            "question_text": None,
+            "topic": None,
+            "difficulty_tier": None,
+            "source_book": None,
+            "source_section_title": None,
+            "question_number": session.questions_asked_count,
+            "total_planned_questions": session.total_planned_questions,
+            "interview_complete": True
+        }
+        
+    # Extract plan and profile
+    plan = json.loads(session.planned_topics_json)
+    skill_topics = plan.get("skill_topics", [])
+    project_targets = plan.get("project_targets", [])
+    resume_profile = json.loads(session.resume_profile_json)
+    
+    # Determine phase
+    phase = "skills"
+    topic = ""
+    concept_being_tested = ""
+    question_text = ""
+    expected_answer_points = []
+    source_chunk_id = None
+    source_book = None
+    source_section_title = None
+    source_chunk_text = None
+    question_type = "skill"
+    
+    # Collect used chunks
+    used_chunk_ids = {q.source_chunk_id for q in session.questions if q.source_chunk_id}
+    
+    # 1. Skills Phase
+    if session.questions_asked_count < len(skill_topics):
+        phase = "skills"
+        topic = skill_topics[session.questions_asked_count]
+        question_type = "skill"
+        
+        candidate_context = {
+            "candidate_name": session.candidate_name,
+            "raw_skills": resume_profile.get("raw_skills", []),
+            "projects": resume_profile.get("projects", []),
+            "mapped_topics": resume_profile.get("mapped_topics", [])
+        }
+        
+        try:
+            q_res = question_generator.generate_question(
+                role=session.role,
+                topic=topic,
+                difficulty_tier=session.current_difficulty_tier,
+                candidate_context=candidate_context,
+                used_chunk_ids=used_chunk_ids
+            )
+            question_text = q_res["question"]
+            concept_being_tested = q_res["concept_being_tested"]
+            expected_answer_points = q_res["expected_answer_points"]
+            source_chunk_id = q_res["source_chunk_id"]
+            source_book = q_res["source_book"]
+            source_section_title = q_res["source_section_title"]
+            source_chunk_text = q_res["source_chunk_text"]
+        except Exception as e:
+            # Fallback question if parser or LLM fails
+            question_text = f"Could you explain the core concepts, common algorithms, and trade-offs related to {topic}?"
+            concept_being_tested = topic
+            expected_answer_points = [f"Explain {topic}", f"Discuss key algorithms", "Detail trade-offs"]
+            source_chunk_text = f"Fallback content for topic: {topic}"
+            
+    # 2. Transition Phase
+    elif session.questions_asked_count == len(skill_topics) and project_targets:
+        phase = "project_transition"
+        question_type = "transition"
+        first_proj = project_targets[0]
+        proj_title = first_proj.get("title") or "your project"
+        proj_desc = first_proj.get("description") or ""
+        
+        prompt = f"""You are an advanced technical interviewer conducting a candidate interview.
+We are transitioning from testing core technical skills to discussing the candidate's project: '{proj_title}'.
+Write a short (1 sentence) natural transition line introducing that we will now discuss the project '{proj_title}', then ask an open-ended question about their role, architecture, or approach in it.
+Also generate 3 expected key points that the candidate should cover in their answer.
+
+Return ONLY a JSON object with keys "question" and "expected_points":
+{{
+  "question": "A 1-sentence transition + open-ended question",
+  "expected_points": ["point 1", "point 2", "point 3"]
+}}
+
+Candidate project description:
+{proj_desc}
+"""
+        try:
+            raw_res = llm_client.call_llm(prompt, temperature=0.7, json_mode=True)
+            data = json.loads(raw_res)
+            question_text = data["question"]
+            expected_answer_points = data.get("expected_points", ["Describe project architecture", "Explain candidate's individual contribution", "Detail technologies used"])
+        except Exception:
+            question_text = f"Now that we've covered your technical skills, I'd like to transition to your project '{proj_title}'. Could you describe your role, the main architecture, and the biggest technical challenge you faced?"
+            expected_answer_points = ["Describe project architecture", "Explain candidate's individual contribution", "Detail technologies used"]
+            
+        concept_being_tested = f"Project Transition: {proj_title}"
+        topic = proj_title
+        
+    # 3. Projects Phase
+    else:
+        phase = "projects"
+        question_type = "project"
+        
+        # Calculate index relative to projects targets list
+        project_idx = session.questions_asked_count - len(skill_topics) - (1 if project_targets else 0)
+        
+        if 0 <= project_idx < len(project_targets):
+            target_project = project_targets[project_idx]
+            proj_title = target_project.get("title") or "your project"
+            topic = target_project.get("related_topics", ["supervised_learning"])[0]
+            
+            project_candidate_context = {
+                "candidate_name": session.candidate_name,
+                "raw_skills": resume_profile.get("raw_skills", []),
+                "projects": [target_project],  # Restrict to this project only to force pairing
+                "mapped_topics": resume_profile.get("mapped_topics", [])
+            }
+            
+            try:
+                q_res = question_generator.generate_question(
+                    role=session.role,
+                    topic=topic,
+                    difficulty_tier=session.current_difficulty_tier,
+                    candidate_context=project_candidate_context,
+                    used_chunk_ids=used_chunk_ids
+                )
+                question_text = q_res["question"]
+                concept_being_tested = q_res["concept_being_tested"]
+                expected_answer_points = q_res["expected_answer_points"]
+                source_chunk_id = q_res["source_chunk_id"]
+                source_book = q_res["source_book"]
+                source_section_title = q_res["source_section_title"]
+                source_chunk_text = q_res["source_chunk_text"]
+            except Exception as e:
+                question_text = f"Regarding your project '{proj_title}', could you elaborate on how you handled key model selection or optimization decisions?"
+                concept_being_tested = f"Project Deep-dive: {proj_title}"
+                expected_answer_points = ["Explain decisions", "Identify trade-offs", "Detail outcomes"]
+                source_chunk_text = f"Fallback content for project: {proj_title}"
+        else:
+            # Fallback if questions count exceeds the expected plan length
+            topic = "model_selection"
+            try:
+                q_res = question_generator.generate_question(
+                    role=session.role,
+                    topic=topic,
+                    difficulty_tier=session.current_difficulty_tier,
+                    used_chunk_ids=used_chunk_ids
+                )
+                question_text = q_res["question"]
+                concept_being_tested = q_res["concept_being_tested"]
+                expected_answer_points = q_res["expected_answer_points"]
+                source_chunk_id = q_res["source_chunk_id"]
+                source_book = q_res["source_book"]
+                source_section_title = q_res["source_section_title"]
+                source_chunk_text = q_res["source_chunk_text"]
+            except Exception:
+                question_text = "Could you explain how cross-validation helps prevent model overfitting?"
+                concept_being_tested = "cross-validation"
+                expected_answer_points = ["Explain validation", "Define overfitting"]
+                source_chunk_text = "Fallback text for cross-validation"
+
+    # Update session status
+    session.current_phase = phase
+    session.questions_asked_count += 1
+    
+    # Save question to DB
+    new_question = DBQuestion(
+        session_id=session.id,
+        question_text=question_text,
+        concept_being_tested=concept_being_tested,
+        expected_answer_points_json=json.dumps(expected_answer_points),
+        topic=topic,
+        difficulty_tier=session.current_difficulty_tier,
+        source_chunk_id=source_chunk_id,
+        source_book=source_book,
+        source_section_title=source_section_title,
+        source_chunk_text=source_chunk_text,
+        question_type=question_type,
+        sequence_number=session.questions_asked_count
+    )
+    db.add(new_question)
+    db.commit()
+    db.refresh(new_question)
+    
+    return {
+        "question_id": new_question.id,
+        "question_text": question_text,
+        "topic": topic,
+        "difficulty_tier": new_question.difficulty_tier,
+        "source_book": source_book,
+        "source_section_title": source_section_title,
+        "question_number": session.questions_asked_count,
+        "total_planned_questions": session.total_planned_questions,
+        "interview_complete": False
+    }
+
+@app.post("/session/{session_id}/answer")
+def submit_answer(
+    session_id: str,
+    payload: AnswerSubmit,
+    db: Session = Depends(get_db)
+):
+    """
+    Submits a candidate's answer for validation.
+    Updates the session current difficulty tier adaptively and returns feedback details.
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    question = db.query(DBQuestion).filter(DBQuestion.id == payload.question_id, DBQuestion.session_id == session_id).first()
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+        
+    # Check if this question is already answered
+    existing_answer = db.query(DBAnswer).filter(DBAnswer.question_id == question.id).first()
+    if existing_answer:
+        raise HTTPException(status_code=400, detail="This question has already been answered.")
+        
+    # De-serialize expected points
+    expected_points = json.loads(question.expected_answer_points_json) if question.expected_answer_points_json else []
+    source_text = question.source_chunk_text or "No textbook passage (project transition question)."
+    
+    try:
+        # Validate candidate answer against expected points and source passage
+        eval_res = answer_validator.validate_answer(
+            question=question.question_text,
+            candidate_answer=payload.answer_text,
+            expected_answer_points=expected_points,
+            source_chunk_text=source_text
+        )
+    except Exception as e:
+        # Fallback eval response
+        eval_res = {
+            "quality_signal": "developing",
+            "covered_points": [],
+            "missed_points": expected_points,
+            "brief_feedback": f"Coaching evaluation failed: {str(e)}"
+        }
+        
+    quality_signal = eval_res.get("quality_signal", "developing")
+    brief_feedback = eval_res.get("brief_feedback", "Response received.")
+    covered_points = eval_res.get("covered_points", [])
+    missed_points = eval_res.get("missed_points", [])
+    
+    # Shift session difficulty dynamically
+    old_tier = session.current_difficulty_tier
+    new_tier = adjust_difficulty(old_tier, quality_signal)
+    session.current_difficulty_tier = new_tier
+    
+    # Store answer and evaluation results
+    new_answer = DBAnswer(
+        question_id=question.id,
+        answer_text=payload.answer_text,
+        quality_signal=quality_signal,
+        covered_points_json=json.dumps(covered_points),
+        missed_points_json=json.dumps(missed_points),
+        brief_feedback=brief_feedback
+    )
+    db.add(new_answer)
+    db.commit()
+    
+    return {
+        "quality_signal": quality_signal,
+        "brief_feedback": brief_feedback,
+        "current_difficulty_tier": new_tier
+    }
+
+@app.get("/session/{session_id}/summary")
+def get_session_summary(session_id: str, db: Session = Depends(get_db)):
+    """
+    Summarizes all answers and returns full performance statistics.
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    validated_answers = []
+    qa_pairs = []
+    
+    for q in session.questions:
+        ans = q.answers[0] if q.answers else None
+        
+        covered_points = []
+        missed_points = []
+        if ans:
+            covered_points = json.loads(ans.covered_points_json) if ans.covered_points_json else []
+            missed_points = json.loads(ans.missed_points_json) if ans.missed_points_json else []
+            
+        validated_answers.append({
+            "topic": q.topic,
+            "quality_signal": ans.quality_signal if ans else "needs_review",
+            "covered_points": covered_points,
+            "missed_points": missed_points,
+            "brief_feedback": ans.brief_feedback if ans else "No answer provided."
+        })
+        
+        qa_pairs.append({
+            "question_id": q.id,
+            "question_text": q.question_text,
+            "topic": q.topic,
+            "difficulty_tier": q.difficulty_tier,
+            "question_type": q.question_type,
+            "sequence_number": q.sequence_number,
+            "answer_text": ans.answer_text if ans else None,
+            "quality_signal": ans.quality_signal if ans else None,
+            "brief_feedback": ans.brief_feedback if ans else None,
+            "covered_points": covered_points,
+            "missed_points": missed_points
+        })
+        
+    try:
+        summary_data = answer_validator.summarize_session(validated_answers)
+    except Exception as e:
+        summary_data = {
+            "total_questions": len(validated_answers),
+            "topics_covered": list(set(q.topic for q in session.questions)),
+            "quality_distribution": {"strong": 0, "developing": 0, "needs_review": len(validated_answers)},
+            "per_topic_summary": {},
+            "overall_impression": f"Could not generate summary report: {str(e)}"
+        }
+        
+    return {
+        "candidate_name": session.candidate_name,
+        "role": session.role,
+        "total_planned_questions": session.total_planned_questions,
+        "overall_impression": summary_data.get("overall_impression"),
+        "quality_distribution": summary_data.get("quality_distribution"),
+        "per_topic_summary": summary_data.get("per_topic_summary"),
+        "topics_covered": summary_data.get("topics_covered"),
+        "qa_pairs": qa_pairs
+    }

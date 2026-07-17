@@ -34,3 +34,7 @@ debug.log
 .project
 .pydevproject
 .settings/
+
+# Databases
+*.db
+grounded_hire.db
