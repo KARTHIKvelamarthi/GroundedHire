@@ -19,6 +19,12 @@ for log_name in ["httpx", "sentence_transformers", "urllib3", "retriever", "llm_
 # Ensure standard output uses UTF-8 to prevent Windows terminal printing encoding errors
 sys.stdout.reconfigure(encoding='utf-8')
 
+# Ensure core directory is in python search path
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_core_dir = os.path.join(_script_dir, "core")
+if _core_dir not in sys.path:
+    sys.path.insert(0, _core_dir)
+
 # Import modules from the current directory
 import config
 import llm_client

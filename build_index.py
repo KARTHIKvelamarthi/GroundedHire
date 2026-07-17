@@ -2,6 +2,13 @@ import json
 import time
 import os
 import sys
+
+# Ensure core directory is in python search path
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_core_dir = os.path.join(_script_dir, "core")
+if _core_dir not in sys.path:
+    sys.path.insert(0, _core_dir)
+
 import numpy as np
 from tqdm import tqdm
 import config

@@ -10,10 +10,13 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-# Ensure the parent directory is in python search path
+# Ensure parent directory and core directory are in python search path
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+core_dir = os.path.join(parent_dir, "core")
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
+if core_dir not in sys.path:
+    sys.path.insert(0, core_dir)
 
 # Import workspace modules
 import resume_parser

@@ -1,6 +1,13 @@
 import os
 import re
 import sys
+
+# Ensure core directory is in python search path
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_core_dir = os.path.join(_script_dir, "core")
+if _core_dir not in sys.path:
+    sys.path.insert(0, _core_dir)
+
 import json
 import random
 import unicodedata
