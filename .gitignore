@@ -2,9 +2,7 @@
 role_pdfs/
 
 # Candidate resumes and uploads
-sample_resume.txt
-j0_resume.pdf
-test_3.pdf
+test_resumes/
 *resume.pdf
 *resume.txt
 *resume.docx

@@ -1,5 +1,10 @@
 import os
 import sys
+import warnings
+
+# Suppress all future and deprecation warnings to keep the terminal output clean
+warnings.simplefilter("ignore")
+
 # Add parent directory to sys.path so we can import from the root directory modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 

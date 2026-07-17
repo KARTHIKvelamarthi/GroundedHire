@@ -3,3 +3,4 @@ tiktoken
 sentence-transformers
 faiss-cpu
 tqdm
+python-dotenv

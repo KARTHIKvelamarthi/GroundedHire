@@ -6,6 +6,7 @@ import requests
 from datetime import datetime
 from typing import Any
 import retriever
+import llm_client
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,24 +33,9 @@ TOPIC_QUERY_MAP = {
 
 def query_ollama_json(prompt: str, temperature: float = 0.7) -> str:
     """
-    Sends a structured generation request to local Ollama running mistral:7b-instruct.
+    Sends a structured generation request to local Ollama/Gemini via llm_client.
     """
-    url = "http://localhost:11434/api/generate"
-    payload = {
-        "model": "mistral:7b-instruct",
-        "prompt": prompt,
-        "format": "json",
-        "stream": False,
-        "options": {
-            "temperature": temperature
-        }
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=300)
-        response.raise_for_status()
-        return response.json().get("response", "").strip()
-    except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to connect to local Ollama server at {url}: {e}")
+    return llm_client.call_llm(prompt, temperature=temperature, json_mode=True)
 
 def validate_question_data(data: dict) -> bool:
     """
@@ -266,8 +252,10 @@ Subtly frame/tailor the question in a way that aligns with the candidate's backg
 Do NOT mention or invent facts about the candidate that are not provided in this background.
 
 IMPORTANT RULES FOR PERSONALIZATION:
-1. Reference the candidate's project '{proj_title}' and their experience with its techniques/skills as a natural jumping-off point.
-2. Ensure the technical comparison is sound and logical (e.g. comparing classification methods to classification methods).
+1. When referencing the candidate's project, you may reference only what is EXPLICITLY stated in their project description/technologies_used (e.g. task type, named tools, named techniques). Do NOT assert that the candidate used a specific technique, metric, or method unless it is verbatim or near-verbatim present in their project description.
+2. If you want to ask about a technique relevant to their project's problem type (e.g. asking about evaluation metrics for an imbalanced classification task they worked on), phrase it as a question about the problem they described, NOT as a statement that they already used that specific technique. For example: prefer 'Given that you worked on risk scoring under class imbalance, how would you approach evaluating such a classifier?' over 'you've worked with ROC curves in GraphGuard.'
+3. Only reference a project by name if it's DIRECTLY relevant to the question/concept being asked. Do NOT decoratively name-drop unrelated projects (e.g. do not mention a pure database/backend project like '{proj_title}' in the opening framing of an ML evaluation-metrics question just for personalization flavor, since it isn't actually connected to what's being asked).
+4. Ensure the technical comparison is sound and logical (e.g. comparing classification methods to classification methods).
 
 CANDIDATE BACKGROUND:
 {context_str}
@@ -276,7 +264,7 @@ CANDIDATE BACKGROUND:
             context_instruction = """
 The candidate's background does NOT technically match the concepts in the textbook passage.
 Therefore, do NOT make any technical comparison, do NOT name any specific candidate project, and do NOT name any specific candidate skills or algorithms (such as Random Forest, scikit-learn, etc.).
-Instead, use a loose, high-level framing referencing their general machine learning background (e.g., 'Given your experience building machine learning applications...' or 'Given your background in machine learning systems...').
+Instead, use a loose, high-level framing referencing their general machine learning background (e.g., 'Given your experience building machine learning applications...').
 """
     
     prompt = f"""You are a senior technical interviewer. Write ONE interview question that tests understanding of a concept described in the following textbook passage.

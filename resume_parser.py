@@ -4,6 +4,7 @@ import re
 import json
 import requests
 import fitz  # PyMuPDF
+import llm_client
 from ingest import assign_topics  # Reuse exact same taxonomy tagger from ingest.py
 
 # Fixed taxonomy for downstream retrieval consistency
@@ -220,10 +221,10 @@ def split_projects_verbatim(project_text: str) -> list[dict]:
         starts_with_num = re.match(r"^\d+[\s.)\]-]", line) is not None
         contains_pipe = "|" in line
         
-        # A line is a title if it contains a pipe, starts with a number, or is the first project
+        # A line is a title if it contains a pipe, a dash surrounded by spaces, starts with a number, or is the first project
         is_title = False
         if not is_bullet:
-            if starts_with_num or contains_pipe or current_project is None:
+            if starts_with_num or contains_pipe or " - " in line or " – " in line or current_project is None:
                 is_title = True
                 
         if is_title:
@@ -262,25 +263,9 @@ def split_projects_verbatim(project_text: str) -> list[dict]:
 
 def query_ollama(prompt: str) -> str:
     """
-    Sends a JSON generation request to local Ollama.
+    Sends a JSON generation request to local Ollama via llm_client.
     """
-    url = "http://localhost:11434/api/generate"
-    payload = {
-        "model": "mistral:7b-instruct",
-        "prompt": prompt,
-        "format": "json",
-        "stream": False,
-        "options": {
-            "temperature": 0.1
-        }
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=300)
-        response.raise_for_status()
-        result_json = response.json()
-        return result_json.get("response", "").strip()
-    except requests.exceptions.RequestException as e:
-        raise ConnectionError(f"Failed to connect to local Ollama server at {url}: {e}")
+    return llm_client.call_llm(prompt, temperature=0.1, json_mode=True)
 
 def infer_experience_level_and_justification_via_llm(project_text: str) -> tuple[str, str]:
     """

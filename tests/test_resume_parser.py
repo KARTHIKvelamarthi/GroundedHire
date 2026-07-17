@@ -1,5 +1,10 @@
 import os
 import sys
+import warnings
+
+# Suppress all future and deprecation warnings to keep the terminal output clean
+warnings.simplefilter("ignore")
+
 # Add parent directory to sys.path so we can import from the root directory modules
 PARENT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, PARENT_DIR)
@@ -36,8 +41,9 @@ Projects:
 """
 
 def create_sample_resume():
-    file_path = os.path.join(PARENT_DIR, "sample_resume.txt")
+    file_path = os.path.join(PARENT_DIR, "test_resumes", "sample_resume.txt")
     if not os.path.exists(file_path):
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(DUMMY_RESUME_CONTENT)
         print(f"Created dummy resume: {file_path}")
@@ -83,11 +89,11 @@ def main():
     dummy_path = create_sample_resume()
     test_file(dummy_path)
     
-    pdf_path = os.path.join(PARENT_DIR, "j0_resume.pdf")
+    pdf_path = os.path.join(PARENT_DIR, "test_resumes", "j0_resume.pdf")
     if os.path.exists(pdf_path):
         test_file(pdf_path)
     else:
-        print(f"\n[WARNING] Actual resume file '{pdf_path}' not found in parent directory.")
+        print(f"\n[WARNING] Actual resume file '{pdf_path}' not found in test_resumes directory.")
 
 if __name__ == "__main__":
     main()
