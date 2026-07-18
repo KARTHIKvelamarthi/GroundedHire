@@ -42,7 +42,8 @@ def validate_answer(
     question: str,
     candidate_answer: str,
     expected_answer_points: list[str],
-    source_chunk_text: str
+    source_chunk_text: str,
+    project_description: str = None
 ) -> dict:
     """
     Evaluates the candidate's answer against the expected points and source passage.
@@ -52,13 +53,28 @@ def validate_answer(
     answer_clean = candidate_answer.strip()
     is_empty_or_too_short = len(answer_clean.split()) < 5 or answer_clean.lower() in ["skip", "i don't know", "dont know", "not sure", "no idea", "pass"]
     
+    discrepancy_clause = ""
+    discrepancy_schema = ""
+    if project_description:
+        discrepancy_clause = f"""
+CANDIDATE'S RESUME PROJECT DESCRIPTION:
+{project_description}
+
+CRITICAL DISCREPANCY RULE:
+Compare the candidate's answer against their Resume Project Description.
+Check if the candidate's answer contains any details, metrics, values, or technologies that do not match, contradict, or are missing from the provided Resume Project Description.
+If there is a mismatch or contradiction, identify it clearly.
+"""
+        discrepancy_schema = """,
+  "discrepancy": "<discrepancy : metric/value/tech does not match/miss from resume OR null if no discrepancy is found>" """
+    
     prompt = f"""You are a constructive technical interviewer and coach. Assess how well the candidate's answer aligns with the source material and expected answer points.
 
 CRITICAL RULES:
 1. Do NOT judge based on your own external knowledge. Only compare the candidate's answer against the provided textbook source passage and expected points.
 2. Be generous, constructive, and coaching-oriented. This is NOT a punitive pass/fail exam.
 3. If the candidate's answer is extremely short (e.g. less than 5 words, "skip", "not sure", or empty), set quality_signal to "needs_review" and note in brief_feedback that the answer was too brief or skipped to be assessed.
-
+{discrepancy_clause}
 TEXTBOOK SOURCE PASSAGE:
 {source_chunk_text}
 
@@ -80,7 +96,7 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
   "missed_points": [
     "<exact items from the EXPECTED ANSWER POINTS list that were NOT addressed by the candidate>"
   ],
-  "brief_feedback": "<1-2 sentences of constructive and specific feedback, referencing the source material where relevant (e.g. 'Good explanation of X; the source material also emphasizes Y, which could strengthen this answer.')>"
+  "brief_feedback": "<1-2 sentences of constructive and specific feedback, referencing the source material where relevant (e.g. 'Good explanation of X; the source material also emphasizes Y, which could strengthen this answer.')>"{discrepancy_schema}
 }}
 """
 
@@ -96,6 +112,11 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
         pass
         
     if data and validate_json_response(data):
+        if "discrepancy" in data and data["discrepancy"]:
+            disc_text = str(data["discrepancy"])
+            if "discrepancy" not in disc_text.lower():
+                disc_text = f"discrepancy : {disc_text}"
+            data["brief_feedback"] = data["brief_feedback"] + f"\n\n{disc_text}"
         return data
         
     # 2. Retry Attempt on Failure
@@ -111,6 +132,12 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
         
     if not validate_json_response(data):
         raise ValueError(f"Ollama output failed validation after retry. Data: {data}")
+        
+    if "discrepancy" in data and data["discrepancy"]:
+        disc_text = str(data["discrepancy"])
+        if "discrepancy" not in disc_text.lower():
+            disc_text = f"discrepancy : {disc_text}"
+        data["brief_feedback"] = data["brief_feedback"] + f"\n\n{disc_text}"
         
     return data
 

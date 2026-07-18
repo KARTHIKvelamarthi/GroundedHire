@@ -9,6 +9,7 @@ warnings.simplefilter("ignore")
 
 # Add parent directory to sys.path to import modules from root
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../core")))
 
 from answer_validator import validate_answer, summarize_session
 
@@ -82,6 +83,16 @@ def run_evaluation(case_id: str, question: str, expected_points: list[str], sour
             
     return results
 
+# Case C: Discrepancy checking (Project question)
+QUESTION_C = "Describe the model architecture, framework, and evaluation metrics used in your healthcare triage classification system."
+PROJECT_DESC_C = "Developed a healthcare triage classification system using Random Forest in scikit-learn, achieving a 92% validation accuracy."
+EXPECTED_POINTS_C = [
+    "Used Random Forest classification model.",
+    "Built within scikit-learn framework.",
+    "Achieved 92% accuracy metric."
+]
+ANSWER_C = "I designed a deep convolutional neural network (CNN) model using PyTorch that achieved a 99% accuracy on healthcare triage."
+
 def main():
     print("Starting Answer Validator Validation Suite...")
     
@@ -110,6 +121,29 @@ def main():
         tier="intermediate"
     )
     all_results.extend(results_b)
+
+    # Run Case C: Discrepancy Verification
+    print("\n=======================================================")
+    print("EVALUATING CASE C: Resume Discrepancy Checking")
+    print("=======================================================")
+    print(f"Project Description: '{PROJECT_DESC_C}'")
+    print(f"Candidate Answer: '{ANSWER_C}'")
+    
+    start_time = time.time()
+    try:
+        eval_res = validate_answer(
+            question=QUESTION_C,
+            candidate_answer=ANSWER_C,
+            expected_answer_points=EXPECTED_POINTS_C,
+            source_chunk_text="No textbook passage (project question).",
+            project_description=PROJECT_DESC_C
+        )
+        elapsed = time.time() - start_time
+        print(f"Evaluation succeeded in {elapsed:.2f} seconds.")
+        print(json.dumps(eval_res, indent=2, ensure_ascii=False))
+        all_results.append(eval_res)
+    except Exception as e:
+        print(f"[ERROR] Evaluation failed for Case C: {e}")
     
     # Run session summary
     print("\n=======================================================")
@@ -121,3 +155,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

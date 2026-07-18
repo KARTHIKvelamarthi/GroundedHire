@@ -403,17 +403,33 @@ def submit_answer(
     if existing_answer:
         raise HTTPException(status_code=400, detail="This question has already been answered.")
         
-    # De-serialize expected points
-    expected_points = json.loads(question.expected_answer_points_json) if question.expected_answer_points_json else []
-    source_text = question.source_chunk_text or "No textbook passage (project transition question)."
-    
+    # Extract project description if checking a project or transition question
+    project_description = None
+    if question.question_type in ["transition", "project"]:
+        try:
+            profile = json.loads(session.resume_profile_json)
+            plan = json.loads(session.planned_topics_json)
+            skill_topics = plan.get("skill_topics", [])
+            project_targets = plan.get("project_targets", [])
+            
+            if question.question_type == "transition" and project_targets:
+                project_description = project_targets[0].get("description")
+            elif question.question_type == "project" and project_targets:
+                # project_idx is the sequence number minus the number of skill questions, minus the 1 transition question, minus 1 for 0-indexing
+                project_idx = question.sequence_number - len(skill_topics) - 2
+                if 0 <= project_idx < len(project_targets):
+                    project_description = project_targets[project_idx].get("description")
+        except Exception as e:
+            print(f"[WARNING] Failed to extract project description for discrepancy checking: {e}")
+
     try:
-        # Validate candidate answer against expected points and source passage
+        # Validate candidate answer against expected points, source passage, and resume description
         eval_res = answer_validator.validate_answer(
             question=question.question_text,
             candidate_answer=payload.answer_text,
             expected_answer_points=expected_points,
-            source_chunk_text=source_text
+            source_chunk_text=source_text,
+            project_description=project_description
         )
     except Exception as e:
         # Fallback eval response
