@@ -20,7 +20,7 @@ def validate_json_response(data: dict) -> bool:
     Checks that the dictionary has the required keys and that quality_signal
     is one of the 3 allowed values: 'strong', 'developing', 'needs_review'.
     """
-    required_keys = {"quality_signal", "covered_points", "missed_points", "brief_feedback"}
+    required_keys = {"quality_signal", "brief_feedback"}
     if not isinstance(data, dict):
         return False
     if not required_keys.issubset(data.keys()):
@@ -28,9 +28,6 @@ def validate_json_response(data: dict) -> bool:
     
     sig = data["quality_signal"]
     if sig not in ["strong", "developing", "needs_review"]:
-        return False
-        
-    if not isinstance(data["covered_points"], list) or not isinstance(data["missed_points"], list):
         return False
         
     if not isinstance(data["brief_feedback"], str):
@@ -67,11 +64,10 @@ If there is a mismatch or contradiction, identify it clearly.
 """
         discrepancy_schema = """,
   "discrepancy": "<discrepancy : metric/value/tech does not match/miss from resume OR null if no discrepancy is found>" """
-    
-    prompt = f"""You are a constructive technical interviewer and coach. Assess how well the candidate's answer aligns with the source material and expected answer points.
+    prompt = f"""You are a constructive technical interviewer and coach. Assess how well the candidate's answer aligns with the source material.
 
 CRITICAL RULES:
-1. Do NOT judge based on your own external knowledge. Only compare the candidate's answer against the provided textbook source passage and expected points.
+1. Do NOT judge based on your own external knowledge. Only compare the candidate's answer against the provided textbook source passage.
 2. Be generous, constructive, and coaching-oriented. This is NOT a punitive pass/fail exam.
 3. If the candidate's answer is extremely short (e.g. less than 5 words, "skip", "not sure", or empty), set quality_signal to "needs_review" and note in brief_feedback that the answer was too brief or skipped to be assessed.
 {discrepancy_clause}
@@ -81,21 +77,12 @@ TEXTBOOK SOURCE PASSAGE:
 QUESTION:
 {question}
 
-EXPECTED ANSWER POINTS:
-{json.dumps(expected_answer_points, indent=2)}
-
 CANDIDATE'S ANSWER:
 {candidate_answer}
 
 JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no markdown fences, no preamble, and no extra keys):
 {{
   "quality_signal": "<strong, developing, or needs_review>",
-  "covered_points": [
-    "<exact items from the EXPECTED ANSWER POINTS list that were addressed, paraphrased, or referenced by the candidate>"
-  ],
-  "missed_points": [
-    "<exact items from the EXPECTED ANSWER POINTS list that were NOT addressed by the candidate>"
-  ],
   "brief_feedback": "<1-2 sentences of constructive and specific feedback, referencing the source material where relevant (e.g. 'Good explanation of X; the source material also emphasizes Y, which could strengthen this answer.')>"{discrepancy_schema}
 }}
 """
@@ -112,6 +99,8 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
         pass
         
     if data and validate_json_response(data):
+        data["covered_points"] = []
+        data["missed_points"] = []
         if "discrepancy" in data and data["discrepancy"]:
             disc_text = str(data["discrepancy"])
             if "discrepancy" not in disc_text.lower():
@@ -122,7 +111,7 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
     # 2. Retry Attempt on Failure
     retry_prompt = f"""{prompt}
 
-[WARNING] Your previous response was invalid. Ensure that quality_signal is exactly one of 'strong', 'developing', or 'needs_review'. covered_points and missed_points must be arrays containing exact strings from the EXPECTED ANSWER POINTS list. Return ONLY a valid JSON object matching the schema.
+[WARNING] Your previous response was invalid. Ensure that quality_signal is exactly one of 'strong', 'developing', or 'needs_review'. Return ONLY a valid JSON object matching the schema.
 """
     raw_output_retry = query_ollama_json(retry_prompt)
     try:
@@ -133,6 +122,8 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
     if not validate_json_response(data):
         raise ValueError(f"Ollama output failed validation after retry. Data: {data}")
         
+    data["covered_points"] = []
+    data["missed_points"] = []
     if "discrepancy" in data and data["discrepancy"]:
         disc_text = str(data["discrepancy"])
         if "discrepancy" not in disc_text.lower():

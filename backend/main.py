@@ -403,6 +403,10 @@ def submit_answer(
     if existing_answer:
         raise HTTPException(status_code=400, detail="This question has already been answered.")
         
+    # De-serialize expected points
+    expected_points = json.loads(question.expected_answer_points_json) if question.expected_answer_points_json else []
+    source_text = question.source_chunk_text or "No textbook passage (project transition question)."
+    
     # Extract project description if checking a project or transition question
     project_description = None
     if question.question_type in ["transition", "project"]:

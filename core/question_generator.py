@@ -41,15 +41,13 @@ def validate_question_data(data: dict) -> bool:
     """
     Checks that the dictionary has required keys, is not empty, and the question ends with a question mark.
     """
-    required_keys = {"question", "concept_being_tested", "expected_answer_points"}
+    required_keys = {"question", "concept_being_tested"}
     if not isinstance(data, dict):
         return False
     if not required_keys.issubset(data.keys()):
         return False
     q = data["question"]
     if not isinstance(q, str) or not q.strip().endswith("?"):
-        return False
-    if not isinstance(data["expected_answer_points"], list) or len(data["expected_answer_points"]) == 0:
         return False
     return True
 
@@ -283,11 +281,7 @@ IMPORTANT FORMATTING RULES:
 JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no markdown fences, no preamble, and no extra keys):
 {{
   "question": "<the interview question text, MUST end with a question mark '?' and not contain trailing sentences ending with a period>",
-  "concept_being_tested": "<short phrase, e.g. 'bias-variance tradeoff'>",
-  "expected_answer_points": [
-    "<bullet point 1>",
-    "<bullet point 2>"
-  ]
+  "concept_being_tested": "<short phrase, e.g. 'bias-variance tradeoff'>"
 }}
 """
 
@@ -332,7 +326,7 @@ Return ONLY a valid JSON object matching the schema.
     return {
         "question": data["question"],
         "concept_being_tested": data["concept_being_tested"],
-        "expected_answer_points": data["expected_answer_points"],
+        "expected_answer_points": [],
         "topic": topic,
         "difficulty_tier": difficulty_tier,
         "role": role,

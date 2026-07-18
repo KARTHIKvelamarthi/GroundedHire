@@ -5,9 +5,9 @@ import warnings
 # Suppress all future and deprecation warnings to keep the terminal output clean
 warnings.simplefilter("ignore")
 
-# Add parent directory to sys.path so we can import from the root directory modules
 PARENT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, PARENT_DIR)
+sys.path.insert(0, os.path.join(PARENT_DIR, "core"))
 
 import time
 import json
