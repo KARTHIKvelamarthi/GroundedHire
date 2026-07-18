@@ -3,8 +3,29 @@ import sys
 import json
 import shutil
 import uuid
+import logging
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
+
+# Configure clean, minimal terminal logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(name)s | %(message)s",
+    datefmt="%H:%M:%S"
+)
+logger = logging.getLogger("backend.main")
+
+# Suppress noisy third-party library logging
+logging.getLogger("faiss.loader").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("filelock").setLevel(logging.WARNING)
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.WARNING)
+logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+logging.getLogger("multipart").setLevel(logging.WARNING)
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +51,20 @@ from .models import Session as DBSession, Question as DBQuestion, Answer as DBAn
 
 # Create FastAPI instance
 app = FastAPI(title="GroundedHire Backend API")
+
+@app.on_event("startup")
+async def startup_event():
+    # Re-apply logger levels at startup to override any uvicorn defaults
+    logging.getLogger("faiss.loader").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("filelock").setLevel(logging.WARNING)
+    logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+    logging.getLogger("transformers").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    logging.getLogger("multipart").setLevel(logging.WARNING)
 
 # Configure CORS
 app.add_middleware(
@@ -85,6 +120,8 @@ async def start_session(
     """
     if role not in ["ai_ml_engineer", "data_science_applied_ml"]:
         raise HTTPException(status_code=400, detail="Invalid role specified.")
+
+    logger.info(f"Parsing resume: {file.filename}")
 
     # Save uploaded file temporarily
     temp_dir = os.path.join(parent_dir, "temp_uploads")
@@ -179,6 +216,8 @@ def get_next_question(session_id: str, db: Session = Depends(get_db)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
+    logger.info(f"Retrieving next question for session_id={session_id}")
+
     if session.questions_asked_count >= session.total_planned_questions:
         return {
             "question_id": None,
@@ -394,6 +433,8 @@ def submit_answer(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
+    logger.info(f"Validating answer for question_id={payload.question_id}")
+
     question = db.query(DBQuestion).filter(DBQuestion.id == payload.question_id, DBQuestion.session_id == session_id).first()
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
@@ -481,6 +522,8 @@ def get_session_summary(session_id: str, db: Session = Depends(get_db)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
+    logger.info(f"Generating session summary for session_id={session_id}")
+
     validated_answers = []
     qa_pairs = []
     

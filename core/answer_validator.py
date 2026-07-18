@@ -46,6 +46,7 @@ def validate_answer(
     Evaluates the candidate's answer against the expected points and source passage.
     Generates coaching-oriented constructive feedback.
     """
+    logger.info("Evaluating candidate answer vs source concepts")
     # Quick client-side check for extremely short/empty/nonsensical inputs to skip LLM or ensure it returns needs_review
     answer_clean = candidate_answer.strip()
     is_empty_or_too_short = len(answer_clean.split()) < 5 or answer_clean.lower() in ["skip", "i don't know", "dont know", "not sure", "no idea", "pass"]

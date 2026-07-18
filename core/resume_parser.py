@@ -3,9 +3,12 @@ import sys
 import re
 import json
 import requests
+import logging
 import fitz  # PyMuPDF
 import llm_client
 from ingest import assign_topics  # Reuse exact same taxonomy tagger from ingest.py
+
+logger = logging.getLogger("core.resume_parser")
 
 # Fixed taxonomy for downstream retrieval consistency
 FIXED_TAXONOMY = [
@@ -323,6 +326,7 @@ def parse_resume(file_path: str, timing_dict: dict = None) -> dict:
     Parses a candidate's resume by combining pure python extraction and a single target LLM call.
     """
     import time
+    logger.info(f"Parsing resume: {os.path.basename(file_path)}")
     
     # 0. Text extraction
     t_start = time.time()

@@ -232,7 +232,7 @@ def generate_question(
         
         for p in projects:
             relation = assess_project_chunk_relation(p, chunk_text)
-            logger.info(f"Compatibility check for project '{p.get('title')}': {relation}")
+            logger.info(f"Compatibility check: project='{p.get('title')}' vs chunk -> genuinely_relate={relation.get('genuinely_relate')}")
             relate_val = relation.get("genuinely_relate")
             if relate_val is True or str(relate_val).lower() == "true":
                 has_compatible_project = True
@@ -287,6 +287,8 @@ JSON OUTPUT SCHEMA (Return ONLY a JSON object conforming to this schema, with no
 
     # 6. Query Ollama and Validate
     raw_output = query_ollama_json(prompt)
+    backend_used = "Groq" if "Groq" in (llm_client.last_used_backend or "") else "Ollama"
+    logger.info(f"Generating question via {backend_used}")
     data = None
     try:
         data = json.loads(raw_output)

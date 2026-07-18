@@ -23,7 +23,7 @@ def call_llm(prompt: str, temperature: float, json_mode: bool = True) -> str:
     # Try Groq if API key is present
     if api_key:
         try:
-            logger.info("Attempting LLM call via Groq API (llama-3.3-70b-versatile)...")
+            logger.info("LLM call routed to: Groq")
             url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -71,7 +71,7 @@ def call_llm(prompt: str, temperature: float, json_mode: bool = True) -> str:
         payload["format"] = "json"
         
     try:
-        logger.info("Executing fallback call to local Ollama...")
+        logger.info("LLM call routed to: Ollama fallback")
         response = requests.post(url, json=payload, timeout=300)
         response.raise_for_status()
         last_used_backend = "Local Ollama (mistral:7b-instruct) fallback"

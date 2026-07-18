@@ -76,6 +76,9 @@ def retrieve(
         list[dict]: List of matched chunk dictionaries, each containing 'similarity_score'.
     """
     # 1. Load model and indices
+    topic_str = topics[0] if topics else query
+    logger.info(f"Retrieving chunks for topic='{topic_str}', difficulty='{difficulty_tier}', role='{role}'")
+    
     model = get_embedding_model()
     try:
         index, metadata = get_index_and_metadata(role)
