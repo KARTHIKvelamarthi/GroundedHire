@@ -90,6 +90,38 @@ graph TD
 
 ---
 
+## 🛡️ Edge Case Handling & Resilience
+
+### 1. Resume Upload
+| Edge Case | Backend Behavior | Frontend Behavior | Result |
+| :--- | :--- | :--- | :--- |
+| **Corrupted/non-PDF file renamed to .pdf** | Caught via `fitz.FileDataError`, returns clean `HTTPException(400)` with error message. | Displays error details in the red alert banner on the home screen. | **Safe**: No crash or blank screen. |
+| **Scanned image-only PDF (no extractable text)** | Length-threshold check (`<50` chars) raises `HTTPException(400)` with descriptive message. | Displays error details in the red alert banner on the home screen. | **Safe**: Fails cleanly. |
+| **Resume with no \"Projects\" section** | Falls back to empty projects list, defaults seniority inference to `"intermediate"`, generates a plan of 6 skills-only questions, and skips project phases entirely. | Interview runs smoothly through the skills phase directly to the summary view. | **Safe**: No crashes. |
+| **Empty/near-empty file** | Same `<50` char threshold check triggers clean `HTTPException(400)`. | Displays error details in the red alert banner. | **Safe**: Fails cleanly. |
+| **No file selected on submit** | Blocked client-side before any API call is made. | Displays user-facing warning: *"Please select or upload a resume file."* | **Safe**: Blocked on client. |
+
+### 2. Interview Flow
+| Edge Case | Backend Behavior | Frontend Behavior | Result |
+| :--- | :--- | :--- | :--- |
+| **Empty answer submission** | Blocked client-side before any API call is made. | Displays user-facing warning: *"Please type your answer before submitting."* | **Safe**: Blocked on client. |
+| **Very long multi-paragraph answer** | Stores answer text in an unbounded SQLite `Text` database column. | Renders response text via flexible, auto-height layout containers. | **Safe**: No layout breakage. |
+| **Browser refresh mid-interview** | Session state persists in the database. | SPA state resets, returning the user to the upload screen. | **Safe**: Resets cleanly. |
+| **Browser back button** | Session state persists in the database. | Standard SPA behavior, exits the page/website to browser history. | **Safe**: Exits normally. |
+
+### 3. Backend & Network
+| Edge Case | Backend Behavior | Frontend Behavior | Result |
+| :--- | :--- | :--- | :--- |
+| **Groq API key missing/disabled** | Automatically falls back to local Ollama (`mistral:7b-instruct`) with no user-visible error. | Execution proceeds uninterrupted (minor latency increase depending on local hardware). | **Safe**: Seamless fallback. |
+| **Request with non-existent `session_id`** | Performs database check and returns a clean `HTTPException(404, "Session not found")`. | Displays parsed error message instead of loading a blank question view. | **Safe**: No stack trace. |
+| **Requesting question beyond `total_planned_questions`** | Backend returns `{"interview_complete": true}`. | Automatically triggers summary generator and transitions view to summary screen. | **Safe**: No loop or crash. |
+
+#### Known Limitations by Design
+- **No session resume after browser refresh**: GroundedHire is architected as a lightweight, no-login, single-session tool for local deployment; a refreshed session must be restarted from the resume upload.
+- **Seniority inference scope**: Seniority estimation draws primarily from parsed Projects and Experience text blocks; resumes with experience described outside these sections may default to a conservative `"intermediate"` estimate to prevent underclassification.
+
+---
+
 ## 📂 Project Directory Structure
 
 ```
