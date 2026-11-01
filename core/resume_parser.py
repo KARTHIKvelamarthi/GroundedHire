@@ -53,6 +53,30 @@ COMMON_SKILLS = [
     "CUDA", "FSDP", "DeepSpeed", "Megatron-LM", "LoRA", "QLoRA", "PEFT"
 ]
 
+# Canonical ML framework-to-topic associations for topics in FIXED_TAXONOMY
+# Strictly justified mappings only: core ML/DL frameworks and their theoretical foundations.
+SKILL_TO_TOPICS_MAP = {
+    # Deep Learning / Neural Networks frameworks
+    "pytorch": ["neural_networks", "deep_learning"],
+    "tensorflow": ["neural_networks", "deep_learning"],
+    "keras": ["neural_networks", "deep_learning"],
+    "jax": ["neural_networks", "deep_learning"],
+    "fastai": ["deep_learning"],
+    "mxnet": ["deep_learning", "neural_networks"],
+    # Foundation Model & Transformer architectures
+    "transformers": ["deep_learning", "neural_networks"],
+    "sentence-transformers": ["deep_learning", "neural_networks"],
+    "sentencetransformers": ["deep_learning", "neural_networks"],
+    "bert": ["deep_learning", "neural_networks"],
+    "gpt": ["deep_learning", "neural_networks"],
+    # Classical Machine Learning algorithms / libraries
+    "scikit-learn": ["classification", "regression", "model_selection"],
+    "sklearn": ["classification", "regression", "model_selection"],
+    "xgboost": ["decision_trees", "ensemble_methods"],
+    "lightgbm": ["decision_trees", "ensemble_methods"],
+    "catboost": ["decision_trees", "ensemble_methods"],
+}
+
 DOMAIN_KEYWORDS = {
     "healthcare": [r"\bhealthcare\b", r"\bmedical\b", r"\bclinical\b", r"\bpatient\b", r"\bmedicine\b", r"\bhospital\b", r"\bpolyp\b", r"\bcamouflage\b"],
     "finance": [r"\bfinance\b", r"\bfinancial\b", r"\bbanking\b", r"\btrading\b", r"\bstock\b", r"\binvestment\b"],

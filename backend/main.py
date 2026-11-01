@@ -44,9 +44,11 @@ import resume_parser
 import question_generator
 import answer_validator
 import llm_client
+import jd_parser
+import topic_planner
 
 # Import local database and models
-from .database import engine, Base, get_db
+from .database import engine, Base, get_db, run_migrations
 from .models import Session as DBSession, Question as DBQuestion, Answer as DBAnswer
 
 # Create FastAPI instance
@@ -54,6 +56,7 @@ app = FastAPI(title="GroundedHire Backend API")
 
 @app.on_event("startup")
 async def startup_event():
+    run_migrations(engine)
     # Re-apply logger levels at startup to override any uvicorn defaults
     logging.getLogger("faiss.loader").setLevel(logging.WARNING)
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
@@ -75,8 +78,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize database tables
+# Initialize database tables and execute safe startup migration
 Base.metadata.create_all(bind=engine)
+run_migrations(engine)
 
 # Difficulty levels ordering
 DIFFICULTY_ORDER = ["beginner", "intermediate", "intermediate-dense"]
@@ -106,17 +110,20 @@ class AnswerSubmit(BaseModel):
     answer_text: str
 
 @app.post("/session/start")
-async def start_session(
+def start_session(
     role: str = Form(...),
     file: UploadFile = File(...),
+    company: Optional[str] = Form(None),
+    jd_text: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     """
     Starts a new interview session:
     1. Saves and parses the candidate's resume
-    2. Constructs a questions plan (skills + transitions + projects)
-    3. Creates a session entry in the database
-    4. Returns initialization parameters and a greeting message
+    2. Parses optional Job Description (JD) and company name
+    3. Constructs an aligned questions plan (skills/verify/jd_gap/spot_check + transitions + projects)
+    4. Creates a session entry in the database
+    5. Returns initialization parameters and a greeting message
     """
     if role not in ["ai_ml_engineer", "data_science_applied_ml"]:
         raise HTTPException(status_code=400, detail="Invalid role specified.")
@@ -141,43 +148,50 @@ async def start_session(
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-    # 1. Extract candidate and difficulty data
+    # 1. Parse optional Job Description (JD)
+    sanitized_company = company.strip() if (company and company.strip()) else None
+    jd_profile = None
+    if jd_text and jd_text.strip():
+        try:
+            jd_profile = jd_parser.parse_jd(jd_text, sanitized_company)
+        except Exception as e:
+            logger.warning(f"Failed to parse JD, proceeding without JD: {e}")
+            jd_profile = {"usable": False, "error": str(e)}
+
+    # 2. Extract candidate and difficulty data
     candidate_name = resume_profile.get("candidate_name") or "Candidate"
-    starting_difficulty = resume_profile.get("starting_difficulty_tier") or "intermediate"
-    
-    # 2. Plan skills phase
-    skill_topics = resume_profile.get("mapped_topics") or []
-    if len(skill_topics) > 6:
-        skill_topics = skill_topics[:6]
-        
+    resume_seniority = resume_profile.get("starting_difficulty_tier") or "intermediate"
+    jd_seniority_hint = jd_profile.get("seniority_hint") if (jd_profile and jd_profile.get("usable")) else None
+    starting_difficulty = topic_planner.calculate_starting_difficulty(resume_seniority, jd_seniority_hint)
+
+    # 3. Plan topics using topic_planner (verify, jd_gap, spot_check)
+    plan_items = topic_planner.plan_topics(resume_profile, jd_profile)
+    topic_plan = [item.to_dict() if hasattr(item, "to_dict") else item for item in plan_items]
+    skill_topics = [item["topic"] for item in topic_plan]
+
     # Plan projects phase
     project_targets = [p for p in resume_profile.get("projects", []) if p.get("related_topics")]
     if len(project_targets) > 3:
         project_targets = project_targets[:3]
-        
-    # 3. Dynamic Padding: If skill_topics + project_targets is less than 6, pad skills with general ML topics
-    DEFAULT_TOPICS = ["classification", "overfitting_regularization", "deep_learning", "neural_networks", "optimization", "model_selection"]
-    for topic in DEFAULT_TOPICS:
-        if len(skill_topics) + len(project_targets) >= 6:
-            break
-        if topic not in skill_topics:
-            skill_topics.append(topic)
-            
-    # Compute total planned questions count
+
+    # Compute total planned questions count (clamp between 6 and 10)
     total_planned = len(skill_topics) + (1 if project_targets else 0) + len(project_targets)
-    # Clamp between 6 and 10
     total_planned_questions = max(6, min(10, total_planned))
-    
-    # Build plan object
+
+    # Build plan object for backward compatibility
     plan = {
         "skill_topics": skill_topics,
         "project_targets": project_targets
     }
-    
+
     # 4. Create Session in Database
     new_session = DBSession(
         candidate_name=candidate_name,
         role=role,
+        company=sanitized_company,
+        jd_text=jd_text,
+        jd_profile=jd_profile,
+        topic_plan=topic_plan,
         resume_profile_json=json.dumps(resume_profile),
         starting_difficulty_tier=starting_difficulty,
         current_difficulty_tier=starting_difficulty,
@@ -189,21 +203,25 @@ async def start_session(
     db.add(new_session)
     db.commit()
     db.refresh(new_session)
-    
+
     # Generate Greeting Message
+    company_phrase = f" at {sanitized_company}" if sanitized_company else ""
     greeting_message = (
-        f"Hi {candidate_name}, you've applied for the {role} role. "
-        f"Based on your resume, I'd estimate you're currently at an {starting_difficulty} level in this field. "
+        f"Hi {candidate_name}, you've applied for the {role} role{company_phrase}. "
+        f"Based on your profile, I'd estimate you're currently at an {starting_difficulty} level in this field. "
         f"Let's get started — I'll ask a few questions about your core skills first, then we'll dig into some of your projects."
     )
-    
+
     return {
         "session_id": new_session.id,
         "candidate_name": candidate_name,
         "role": role,
+        "company": sanitized_company,
         "starting_difficulty_tier": starting_difficulty,
         "total_planned_questions": total_planned_questions,
-        "greeting_message": greeting_message
+        "greeting_message": greeting_message,
+        "jd_usable": bool(jd_profile and jd_profile.get("usable")),
+        "topic_plan": topic_plan
     }
 
 @app.get("/session/{session_id}/next-question")
@@ -248,6 +266,8 @@ def get_next_question(session_id: str, db: Session = Depends(get_db)):
     source_section_title = None
     source_chunk_text = None
     question_type = "skill"
+    source = "skills"
+    resume_ref = None
     
     # Collect used chunks
     used_chunk_ids = {q.source_chunk_id for q in session.questions if q.source_chunk_id}
@@ -255,9 +275,24 @@ def get_next_question(session_id: str, db: Session = Depends(get_db)):
     # 1. Skills Phase
     if session.questions_asked_count < len(skill_topics):
         phase = "skills"
-        topic = skill_topics[session.questions_asked_count]
         question_type = "skill"
-        
+
+        # Check topic_plan for rich plan item (bucket, source, resume_ref)
+        plan_item = None
+        if session.topic_plan and session.questions_asked_count < len(session.topic_plan):
+            plan_item = session.topic_plan[session.questions_asked_count]
+
+        if plan_item:
+            topic = plan_item.get("topic")
+            bucket = plan_item.get("bucket", "spot_check")
+            source = plan_item.get("source", "skills")
+            resume_ref = plan_item.get("resume_ref")
+        else:
+            topic = skill_topics[session.questions_asked_count]
+            bucket = "spot_check"
+            source = "skills"
+            resume_ref = None
+
         candidate_context = {
             "candidate_name": session.candidate_name,
             "raw_skills": resume_profile.get("raw_skills", []),
@@ -270,8 +305,10 @@ def get_next_question(session_id: str, db: Session = Depends(get_db)):
                 role=session.role,
                 topic=topic,
                 difficulty_tier=session.current_difficulty_tier,
-                candidate_context=candidate_context,
-                used_chunk_ids=used_chunk_ids
+                candidate_context=candidate_context if bucket != "jd_gap" else None,
+                used_chunk_ids=used_chunk_ids,
+                bucket=bucket,
+                company=session.company
             )
             question_text = q_res["question"]
             concept_being_tested = q_res["concept_being_tested"]
@@ -294,6 +331,8 @@ def get_next_question(session_id: str, db: Session = Depends(get_db)):
         first_proj = project_targets[0]
         proj_title = first_proj.get("title") or "your project"
         proj_desc = first_proj.get("description") or ""
+        source = "project"
+        resume_ref = proj_title
         
         prompt = f"""You are an advanced technical interviewer conducting a candidate interview.
 We are transitioning from testing core technical skills to discussing the candidate's project: '{proj_title}'.
@@ -333,6 +372,8 @@ Candidate project description:
             target_project = project_targets[project_idx]
             proj_title = target_project.get("title") or "your project"
             topic = target_project.get("related_topics", ["supervised_learning"])[0]
+            source = "project"
+            resume_ref = proj_title
             
             project_candidate_context = {
                 "candidate_name": session.candidate_name,
@@ -347,7 +388,8 @@ Candidate project description:
                     topic=topic,
                     difficulty_tier=session.current_difficulty_tier,
                     candidate_context=project_candidate_context,
-                    used_chunk_ids=used_chunk_ids
+                    used_chunk_ids=used_chunk_ids,
+                    company=session.company
                 )
                 question_text = q_res["question"]
                 concept_being_tested = q_res["concept_being_tested"]
@@ -364,12 +406,15 @@ Candidate project description:
         else:
             # Fallback if questions count exceeds the expected plan length
             topic = "model_selection"
+            source = "skills"
+            resume_ref = None
             try:
                 q_res = question_generator.generate_question(
                     role=session.role,
                     topic=topic,
                     difficulty_tier=session.current_difficulty_tier,
-                    used_chunk_ids=used_chunk_ids
+                    used_chunk_ids=used_chunk_ids,
+                    company=session.company
                 )
                 question_text = q_res["question"]
                 concept_being_tested = q_res["concept_being_tested"]
@@ -401,7 +446,9 @@ Candidate project description:
         source_section_title=source_section_title,
         source_chunk_text=source_chunk_text,
         question_type=question_type,
-        sequence_number=session.questions_asked_count
+        sequence_number=session.questions_asked_count,
+        source=source,
+        resume_ref=resume_ref
     )
     db.add(new_question)
     db.commit()
@@ -416,6 +463,8 @@ Candidate project description:
         "source_section_title": source_section_title,
         "question_number": session.questions_asked_count,
         "total_planned_questions": session.total_planned_questions,
+        "source": new_question.source,
+        "resume_ref": new_question.resume_ref,
         "interview_complete": False
     }
 
@@ -513,6 +562,41 @@ def submit_answer(
         "current_difficulty_tier": new_tier
     }
 
+@app.get("/session/{session_id}/plan")
+def get_session_plan(session_id: str, db: Session = Depends(get_db)):
+    """
+    Returns the planned interview topics, their buckets, reasons, priority scores,
+    and whether a Job Description was utilized.
+    """
+    session = db.query(DBSession).filter(DBSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    topic_plan = session.topic_plan or []
+    if not topic_plan and session.planned_topics_json:
+        plan = json.loads(session.planned_topics_json)
+        topic_plan = [
+            {
+                "topic": t,
+                "bucket": "spot_check",
+                "priority_score": 1.0,
+                "reason": "Listed on your resume",
+                "source": "skills",
+                "resume_ref": None
+            }
+            for t in plan.get("skill_topics", [])
+        ]
+
+    jd_used = bool(session.jd_profile and session.jd_profile.get("usable"))
+    return {
+        "session_id": session.id,
+        "company": session.company,
+        "jd_used": jd_used,
+        "starting_difficulty_tier": session.starting_difficulty_tier,
+        "total_planned_questions": session.total_planned_questions,
+        "plan": topic_plan
+    }
+
 @app.get("/session/{session_id}/summary")
 def get_session_summary(session_id: str, db: Session = Depends(get_db)):
     """
@@ -551,6 +635,8 @@ def get_session_summary(session_id: str, db: Session = Depends(get_db)):
             "difficulty_tier": q.difficulty_tier,
             "question_type": q.question_type,
             "sequence_number": q.sequence_number,
+            "source": q.source,
+            "resume_ref": q.resume_ref,
             "answer_text": ans.answer_text if ans else None,
             "quality_signal": ans.quality_signal if ans else None,
             "brief_feedback": ans.brief_feedback if ans else None,
@@ -572,6 +658,9 @@ def get_session_summary(session_id: str, db: Session = Depends(get_db)):
     return {
         "candidate_name": session.candidate_name,
         "role": session.role,
+        "company": session.company,
+        "jd_used": bool(session.jd_profile and session.jd_profile.get("usable")),
+        "topic_plan": session.topic_plan,
         "total_planned_questions": session.total_planned_questions,
         "overall_impression": summary_data.get("overall_impression"),
         "quality_distribution": summary_data.get("quality_distribution"),

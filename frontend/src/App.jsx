@@ -14,7 +14,10 @@ import {
   ClipboardList,
   Sparkles,
   User,
-  Activity
+  Activity,
+  Briefcase,
+  Building2,
+  FileText
 } from 'lucide-react'
 import './App.css'
 
@@ -36,6 +39,13 @@ function App() {
   const [feedback, setFeedback] = useState(null)
   const [summary, setSummary] = useState(null)
   const [loadingQuestion, setLoadingQuestion] = useState(false)
+
+  // Optional Target Company and Job Description (JD) states
+  const [company, setCompany] = useState('')
+  const [jdText, setJdText] = useState('')
+  const [jdFile, setJdFile] = useState(null)
+  const [showJdInput, setShowJdInput] = useState(false)
+  const jdFileInputRef = useRef(null)
 
   // Drag and drop ref
   const [dragActive, setDragActive] = useState(false)
@@ -83,6 +93,25 @@ function App() {
     fileInputRef.current.click()
   }
 
+  const handleJdFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      const selectedFile = e.target.files[0]
+      if (selectedFile.name.endsWith('.txt')) {
+        const reader = new FileReader()
+        reader.onload = (event) => {
+          setJdText(event.target.result)
+          setJdFile(selectedFile)
+        }
+        reader.readAsText(selectedFile)
+      } else if (selectedFile.name.endsWith('.pdf')) {
+        setJdFile(selectedFile)
+        setJdText(`[Uploaded JD PDF: ${selectedFile.name}]`)
+      } else {
+        setError('Only .pdf and .txt files are supported for Job Descriptions.')
+      }
+    }
+  }
+
   // API Call: Start Interview
   const handleUploadAndStart = async () => {
     if (!file) {
@@ -96,6 +125,12 @@ function App() {
     const formData = new FormData()
     formData.append('role', role)
     formData.append('file', file)
+    if (company && company.trim()) {
+      formData.append('company', company.trim())
+    }
+    if (jdText && jdText.trim()) {
+      formData.append('jd_text', jdText.trim())
+    }
 
     try {
       const response = await fetch(`${BACKEND_URL}/session/start`, {
@@ -354,6 +389,104 @@ function App() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Optional Job Description & Target Company */}
+              <div className="form-group" style={{ marginTop: '8px' }}>
+                <div 
+                  style={{
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
+                    padding: '14px 18px',
+                    borderRadius: '12px',
+                    background: showJdInput ? 'rgba(0, 242, 254, 0.04)' : 'rgba(255, 255, 255, 0.02)',
+                    border: showJdInput ? '1px solid rgba(0, 242, 254, 0.25)' : '1px solid var(--border-color)',
+                    transition: 'all var(--transition-normal)'
+                  }}
+                  onClick={() => setShowJdInput(!showJdInput)}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Briefcase size={18} style={{ color: 'var(--primary)' }} />
+                    <span style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
+                      3. Target Company & Job Description (Optional)
+                    </span>
+                    {(company || jdText) && (
+                      <span className="badge" style={{ background: 'rgba(0, 242, 254, 0.1)', color: 'var(--primary)', border: '1px solid rgba(0, 242, 254, 0.3)', padding: '2px 8px', fontSize: '0.7rem' }}>
+                        Configured
+                      </span>
+                    )}
+                  </div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                    {showJdInput ? 'Collapse ▲' : 'Customize Mock Interview ▼'}
+                  </span>
+                </div>
+
+                {showJdInput && (
+                  <div className="animate-fade-in" style={{
+                    marginTop: '12px',
+                    padding: '20px',
+                    borderRadius: '12px',
+                    background: 'rgba(255, 255, 255, 0.01)',
+                    border: '1px solid rgba(255, 255, 255, 0.06)'
+                  }}>
+                    {/* Target Company Name */}
+                    <div style={{ marginBottom: '16px' }}>
+                      <label className="form-label" style={{ fontSize: '0.85rem', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Building2 size={15} /> Target Company Name
+                      </label>
+                      <input 
+                        type="text"
+                        className="form-input"
+                        placeholder="e.g. DeepMind, Google, Meta, Stripe, Startup"
+                        value={company}
+                        onChange={(e) => setCompany(e.target.value)}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+
+                    {/* Job Description Textarea & File Upload */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <label className="form-label" style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <FileText size={15} /> Job Description (JD)
+                        </label>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '4px 10px', fontSize: '0.75rem', height: 'auto' }}
+                          onClick={() => jdFileInputRef.current && jdFileInputRef.current.click()}
+                        >
+                          <Upload size={12} /> Upload JD (.txt/.pdf)
+                        </button>
+                        <input 
+                          ref={jdFileInputRef}
+                          type="file" 
+                          style={{ display: 'none' }} 
+                          accept=".txt,.pdf"
+                          onChange={handleJdFileChange}
+                        />
+                      </div>
+                      <textarea
+                        className="form-textarea"
+                        rows={5}
+                        placeholder="Paste the target job description here (responsibilities, required skills, preferred qualifications)..."
+                        value={jdText}
+                        onChange={(e) => setJdText(e.target.value)}
+                        style={{ width: '100%', resize: 'vertical' }}
+                      />
+                      {jdFile && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--primary)', marginTop: '4px' }}>
+                          Loaded from file: {jdFile.name}
+                        </div>
+                      )}
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                        When provided, interview topics will align directly with this job's requirements and seniority tier.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Action Button */}

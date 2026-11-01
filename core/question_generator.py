@@ -141,14 +141,21 @@ def generate_question(
     topic: str,
     difficulty_tier: str,
     candidate_context: dict | None = None,
-    used_chunk_ids: set[str] | None = None
+    used_chunk_ids: set[str] | None = None,
+    bucket: str | None = None,
+    company: str | None = None
 ) -> dict:
     """
     Retrieves a textbook chunk based on role, topic, and difficulty,
     and calls the local LLM to generate a personalized and grounded question.
     """
-    # 1. Map difficulty tier for retrieval
+    # 1. Map difficulty tier for retrieval (probe lower tier for jd_gap)
     retriever_tier = difficulty_tier
+    if bucket == "jd_gap":
+        if difficulty_tier == "intermediate-dense":
+            retriever_tier = "intermediate"
+        elif difficulty_tier == "intermediate":
+            retriever_tier = "beginner"
     
     # 2. Get query text from topic
     query = TOPIC_QUERY_MAP.get(topic, topic.replace("_", " "))
@@ -222,7 +229,16 @@ def generate_question(
     
     # Formulate candidate context instruction
     context_instruction = ""
-    if candidate_context:
+    if bucket == "jd_gap":
+        context_instruction = """
+IMPORTANT - JOB DESCRIPTION GAP TOPIC:
+This topic is required by the target Job Description but is ABSENT from the candidate's resume.
+1. Probe fundamental conceptual understanding at an entry or intermediate level.
+2. Do NOT assume the candidate has prior hands-on or production experience with this concept.
+3. NEVER reference or compare with candidate projects (this concept is absent from their resume).
+4. Frame the question around foundational principles, core definitions, or theoretical trade-offs rather than practical production deployment experience.
+"""
+    elif candidate_context:
         skills = candidate_context.get("raw_skills", [])
         projects = candidate_context.get("projects", [])
         
@@ -265,6 +281,16 @@ Therefore, do NOT make any technical comparison, do NOT name any specific candid
 Instead, use a loose, high-level framing referencing their general machine learning background (e.g., 'Given your experience building machine learning applications...').
 """
     
+    # Formulate optional company context instruction
+    company_instruction = ""
+    if company and str(company).strip():
+        sanitized_company = str(company).strip()[:100]
+        company_instruction = f"""
+COMPANY CONTEXT HINT:
+The candidate is interviewing for a position at {sanitized_company}.
+Frame the question with technical rigor and engineering standards typical for an engineering interview at {sanitized_company}, without making up fictional facts about their internal systems.
+"""
+
     prompt = f"""You are a senior technical interviewer. Write ONE interview question that tests understanding of a concept described in the following textbook passage.
 
 TEXTBOOK PASSAGE:
@@ -273,6 +299,7 @@ TEXTBOOK PASSAGE:
 DIFFICULTY LEVEL INSTRUCTIONS:
 {difficulty_instruction}
 {context_instruction}
+{company_instruction}
 
 IMPORTANT FORMATTING RULES:
 1. The question MUST end with a question mark (?).

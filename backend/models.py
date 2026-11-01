@@ -1,6 +1,6 @@
 import datetime
 import uuid
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -18,6 +18,12 @@ class Session(Base):
     questions_asked_count = Column(Integer, default=0)
     planned_topics_json = Column(Text, nullable=False)  # List of topics and project titles to ask
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # JD-based interview fields (nullable)
+    company = Column(String, nullable=True)
+    jd_text = Column(Text, nullable=True)
+    jd_profile = Column(JSON, nullable=True)
+    topic_plan = Column(JSON, nullable=True)
 
     questions = relationship("Question", back_populates="session", cascade="all, delete-orphan")
 
@@ -39,6 +45,10 @@ class Question(Base):
     sequence_number = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Source and resume tracking (nullable)
+    source = Column(String, nullable=True)  # "skills", "jd_gap", "project"
+    resume_ref = Column(String, nullable=True)  # the resume skill or project the question tests
+
     session = relationship("Session", back_populates="questions")
     answers = relationship("Answer", back_populates="question", cascade="all, delete-orphan")
 
@@ -55,3 +65,11 @@ class Answer(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     question = relationship("Question", back_populates="answers")
+
+    @property
+    def source(self):
+        return self.question.source if self.question else None
+
+    @property
+    def resume_ref(self):
+        return self.question.resume_ref if self.question else None

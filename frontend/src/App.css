@@ -179,3 +179,23 @@ footer {
   color: var(--color-needs-review);
   border: 1px solid var(--color-needs-review-border);
 }
+
+/* Text Input Styling */
+.form-input {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  color: var(--text-primary);
+  padding: 12px 16px;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  transition: all var(--transition-normal);
+  outline: none;
+  width: 100%;
+}
+
+.form-input:focus {
+  border-color: var(--primary);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 8px rgba(0, 242, 254, 0.2);
+}
